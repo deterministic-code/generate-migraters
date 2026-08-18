@@ -1,5 +1,3 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { GenerateContext } from "../src/common/generate-context.ts";
 import {
   content,
@@ -10,13 +8,24 @@ import {
   migrateLayout,
   resolveDatasourceDialects,
 } from "../src/common/layout.ts";
-import { apkClientsContent, dbFilePatches } from "../src/common/plan.ts";
-import { MIGRATERS_ROOT } from "../src/common/pack-root.ts";
+import { apkClientsPatch, dbFilePatches } from "../src/common/plan.ts";
+import { fillPackTemplate } from "../src/common/pack-template.ts";
+import { loadHelpText } from "../src/common/help-text.ts";
+import { sqlDdlTokens } from "../src/common/sql-ddl.ts";
 import { entrypointPatch } from "../src/common/entrypoint.ts";
 import { settingsList } from "../src/common/settings.ts";
 
-const CS_DIR = join(MIGRATERS_ROOT, "csharp");
 const MIGRATE_DIR = "MigrateRunner";
+
+const CS_FILES = [
+  { file: "MigrateCreate.cs", verb: "create" },
+  { file: "MigrateDown.cs", verb: "down" },
+  { file: "MigrateUp.cs", verb: "up" },
+  { file: "MigrateSetup.cs", verb: "setup" },
+  { file: "Program.cs" },
+  { file: "ProviderConnectionString.cs" },
+  { file: "MigrateRunner.csproj" },
+] as const;
 
 export const generate = async (
   ctx: GenerateContext,
@@ -24,17 +33,40 @@ export const generate = async (
   const dialects = resolveDatasourceDialects(ctx.settings);
   const layout = migrateLayout(ctx.settings, "csharp");
   const { lane, shared } = layout.dockerPrefixes();
-  const names = await readdir(CS_DIR);
-  const files: GenerateEntry[] = [];
-  for (const name of names) {
-    if (name.startsWith(".")) continue;
-    files.push(
+  const dockerTokens = {
+    lane,
+    shared,
+    migrateDir: MIGRATE_DIR,
+    containerSqlRoot: layout.containerSqlRoot(),
+  };
+  const [ddl, dockerCopy, dockerRuntime, apk, hook] = await Promise.all([
+    sqlDdlTokens(),
+    fillPackTemplate("csharp/templates/dockerfile_migrate_copy.tmpl", dockerTokens),
+    fillPackTemplate(
+      "csharp/templates/dockerfile_migrate_runtime_copy.tmpl",
+      dockerTokens,
+    ),
+    apkClientsPatch(dialects),
+    entrypointPatch(
+      "csharp",
+      MIGRATE_DIR,
+      layout.containerSqlRoot(),
+      layout.containerMigrationsDir("sqlite"),
+    ),
+  ]);
+  const files: GenerateEntry[] = await Promise.all(
+    CS_FILES.map(async (entry) =>
       content(
-        `${MIGRATE_DIR}/${name}`,
-        await readFile(join(CS_DIR, name), "utf8"),
+        `${MIGRATE_DIR}/${entry.file}`,
+        await fillPackTemplate(`csharp/templates/${entry.file}`, {
+          ...ddl,
+          ...("verb" in entry
+            ? { helpText: await loadHelpText(entry.verb) }
+            : {}),
+        }),
       ),
-    );
-  }
+    ),
+  );
   const gitkeeps =
     settingsList(ctx.settings, "backend.languages").length > 1
       ? []
@@ -43,29 +75,15 @@ export const generate = async (
         );
   return [
     ...files,
-    entrypointPatch(
-      "csharp",
-      MIGRATE_DIR,
-      layout.containerSqlRoot(),
-      layout.containerMigrationsDir("sqlite"),
-    ),
+    hook,
     ...dbFilePatches(dialects),
+    patch("Dockerfile", dockerCopy.endsWith("\n") ? dockerCopy : `${dockerCopy}\n`, "MIGRATE_COPY"),
     patch(
       "Dockerfile",
-      `COPY ${shared}sql ./sql
-COPY ${lane}${MIGRATE_DIR} ./${MIGRATE_DIR}
-RUN dotnet publish ${MIGRATE_DIR}/MigrateRunner.csproj -c Release -o /app/migrate-publish
-`,
-      "MIGRATE_COPY",
-    ),
-    patch(
-      "Dockerfile",
-      `COPY --from=build /app/migrate-publish ./${MIGRATE_DIR}
-COPY ${shared}sql ${layout.containerSqlRoot()}
-`,
+      dockerRuntime.endsWith("\n") ? dockerRuntime : `${dockerRuntime}\n`,
       "MIGRATE_RUNTIME_COPY",
     ),
-    patch("Dockerfile", apkClientsContent(dialects), "APK_CLIENTS"),
+    apk,
     ...gitkeeps,
   ];
 };

@@ -20,13 +20,17 @@
   },
   "files": [
     "dist",
+    "templates",
     "typescript/templates",
+    "rust/templates",
+    "csharp/templates",
     "src"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/typescript && cp -R typescript/templates dist/typescript/",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/typescript dist/rust dist/csharp dist/templates && cp -R typescript/templates dist/typescript/ && cp -R rust/templates dist/rust/ && cp -R csharp/templates dist/csharp/ && cp -RL templates dist/",
     "prepare": "npm run build",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "mustache": "^4.2.0"
@@ -34,6 +38,7 @@
   "devDependencies": {
     "@types/mustache": "^4.2.6",
     "@types/node": "^22.10.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.7"
   }
 }

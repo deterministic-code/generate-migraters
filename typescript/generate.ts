@@ -1,12 +1,10 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { GenerateContext } from "../src/common/generate-context.ts";
 import {
   content,
   patch,
   type GenerateEntry,
 } from "../src/common/generate-entry.ts";
-import { fill } from "../src/common/fill.ts";
+import { fillPackTemplate } from "../src/common/pack-template.ts";
 import { libraryImportSpecifier } from "../src/common/library-import.ts";
 import {
   libraryReferenceMode,
@@ -14,19 +12,15 @@ import {
   resolveDatasourceDialects,
 } from "../src/common/layout.ts";
 import {
-  apkClientsContent,
+  apkClientsPatch,
   dbFilePatches,
   dialectDriver,
 } from "../src/common/plan.ts";
-import { PACK_ROOT } from "../src/common/pack-root.ts";
 import { entrypointPatch } from "../src/common/entrypoint.ts";
 import { settingsList } from "../src/common/settings.ts";
 
 const TEST_DB_RELATIVE_PATH = ".test/prebuilt.sqlite";
 const MIGRATERS_DEP = "github:deterministic-code/migraters";
-
-const loadChunk = async (file: string): Promise<string> =>
-  (await readFile(join(PACK_ROOT, "typescript/templates", file), "utf8")).trimEnd();
 
 const buildMigrateScripts = (
   dialects: string[],
@@ -63,9 +57,21 @@ export const generate = async (
   const mode = libraryReferenceMode(ctx.settings, "typescript");
   const { shared } = layout.dockerPrefixes();
   const libImport = libraryImportSpecifier("app", mode, "app.ts");
-  const dbImports =
-    fill(await loadChunk("app_ts_db_hook_imports.ts"), { libImport }) + "\n";
-  const beforeHook = (await loadChunk("app_ts_before_hook.ts")) + "\n";
+  const [dbImportsRaw, beforeHook, dockerfileCopy, apk, hook] = await Promise.all([
+    fillPackTemplate("typescript/templates/app_ts_db_hook_imports.ts", { libImport }),
+    fillPackTemplate("typescript/templates/app_ts_before_hook.ts"),
+    fillPackTemplate("typescript/templates/dockerfile_migrate_copy.json.tmpl", {
+      shared,
+      containerSqlRoot: layout.containerSqlRoot(),
+    }),
+    apkClientsPatch(dialects),
+    entrypointPatch(
+      "typescript",
+      "migrate",
+      layout.containerSqlRoot(),
+      layout.containerMigrationsDir("sqlite"),
+    ),
+  ]);
   const scripts = {
     ...buildMigrateScripts(dialects, layout.migrationsPath),
     pretest: `migrate-setup --provider sqlite --connection $npm_package_config_test_db --migrate-path \${TEST_MIGRATIONS_DIR:-${layout.migrationsPath("sqlite")}} --and-up`,
@@ -93,25 +99,13 @@ export const generate = async (
           content(`sql/${dialect}/migrations/.gitkeep`, ""),
         );
   return [
-    patch("app.ts", dbImports, "APP_DB_IMPORTS"),
-    patch("app.ts", beforeHook, "APP_BEFORE_HOOK"),
-    entrypointPatch(
-      "typescript",
-      "migrate",
-      layout.containerSqlRoot(),
-      layout.containerMigrationsDir("sqlite"),
-    ),
+    patch("app.ts", dbImportsRaw.trimEnd() + "\n", "APP_DB_IMPORTS"),
+    patch("app.ts", beforeHook.trimEnd() + "\n", "APP_BEFORE_HOOK"),
+    hook,
     patch("package.json", JSON.stringify(merge)),
     ...dbFilePatches(dialects),
-    {
-      kind: "patch",
-      filename: "Dockerfile",
-      content: JSON.stringify({
-        anchorSection: "MIGRATE_COPY",
-        copies: [{ src: `${shared}sql`, dest: layout.containerSqlRoot() }],
-      }),
-    },
-    patch("Dockerfile", apkClientsContent(dialects), "APK_CLIENTS"),
+    patch("Dockerfile", dockerfileCopy),
+    apk,
     ...gitkeeps,
   ].filter((e) => ("content" in e ? e.content.length > 0 : true));
 };
