@@ -1,0 +1,39 @@
+{
+  "name": "@deterministic-code/generate-migraters",
+  "version": "0.0.1",
+  "description": "Generators that stream migrate dependency information and package content for typescript, rust, and csharp.",
+  "type": "module",
+  "exports": {
+    "./typescript": {
+      "types": "./dist/typescript/generate.d.ts",
+      "import": "./dist/typescript/generate.js"
+    },
+    "./rust": {
+      "types": "./dist/rust/generate.d.ts",
+      "import": "./dist/rust/generate.js"
+    },
+    "./csharp": {
+      "types": "./dist/csharp/generate.d.ts",
+      "import": "./dist/csharp/generate.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "typescript/templates",
+    "src"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/typescript && cp -R typescript/templates dist/typescript/",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+  },
+  "dependencies": {
+    "mustache": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/mustache": "^4.2.6",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.0"
+  }
+}
