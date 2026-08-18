@@ -22,6 +22,13 @@ const RUST_BINS = [
   { file: "migrate_create.rs", verb: "create" },
 ] as const;
 
+const RUST_LIB = [
+  "migrate/mod.rs",
+  "migrate/checksum.rs",
+  "migrate/split_statements.rs",
+  "migrate/dialect.rs",
+] as const;
+
 export const generate = async (
   ctx: GenerateContext,
 ): Promise<GenerateEntry[]> => {
@@ -62,6 +69,14 @@ export const generate = async (
       ),
     ),
   );
+  const lib: GenerateEntry[] = await Promise.all(
+    RUST_LIB.map(async (file) =>
+      content(
+        `src/${file}`,
+        await fillPackTemplate(`rust/templates/${file}`, ddl),
+      ),
+    ),
+  );
   const gitkeeps =
     settingsList(ctx.settings, "backend.languages").length > 1
       ? []
@@ -70,6 +85,7 @@ export const generate = async (
         );
   return [
     ...bins,
+    ...lib,
     patch("Cargo.toml", cargoBin.endsWith("\n") ? cargoBin : `${cargoBin}\n`, "MIGRATE_BIN"),
     patch("Cargo.toml", cargoDeps.endsWith("\n") ? cargoDeps : `${cargoDeps}\n`, "MIGRATE_DEPS"),
     hook,
