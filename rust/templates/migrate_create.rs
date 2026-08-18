@@ -5,7 +5,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
+#[path = "../migrate/mod.rs"]
+mod migrate;
+use migrate::try_get;
+
 const HELP_TEXT: &str = r#"{{helpText}}"#;
+
+fn help_text() -> String {
+    HELP_TEXT.to_string()
+}
 
 struct Args {
     name: String,
@@ -25,7 +33,7 @@ fn parse_args() -> Result<Args, String> {
             "--migrations-path" => migrations_path = iter.next(),
             "--migrate-path" => migrations_path = iter.next(),
             "-h" | "--help" => {
-                eprint!("{}", HELP_TEXT);
+                eprint!("{}", help_text());
                 process::exit(0);
             }
             other => return Err(format!("unknown arg: {}", other)),
@@ -33,6 +41,9 @@ fn parse_args() -> Result<Args, String> {
     }
     let Some(provider) = provider else {
         return Err("missing --provider — pass --provider <sqlite|postgres|mysql>. Run with --help for examples.".to_string());
+    };
+    let Some(dialect) = try_get(&provider) else {
+        return Err(format!("unsupported provider: {}", provider));
     };
     let Some(name) = name else {
         return Err("missing --name — pass --name <snake_case_slug>.".to_string());
@@ -44,7 +55,7 @@ fn parse_args() -> Result<Args, String> {
         ));
     }
     let migrations_path =
-        migrations_path.unwrap_or_else(|| format!("./sql/{}/migrations", provider));
+        migrations_path.unwrap_or_else(|| format!("./sql/{}/migrations", dialect.name()));
     Ok(Args { name, migrations_path })
 }
 
