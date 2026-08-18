@@ -29,7 +29,7 @@ describe("standalone runners load the unified help templates", () => {
 
   it("csharp HelpTemplates reads templates/help/<verb>.txt and fills migrate-<verb>", async () => {
     const src = await readFile(
-      join(MIGRATERS_ROOT, "csharp", "HelpTemplates.cs"),
+      join(MIGRATERS_ROOT, "csharp", "Infrastructure", "HelpTemplates.cs"),
       "utf8",
     );
     expect(src).toContain('Path.Combine(AppContext.BaseDirectory, "templates", "help"');
