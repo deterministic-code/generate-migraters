@@ -1,5 +1,3 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { GenerateContext } from "../src/common/generate-context.ts";
 import {
   content,
@@ -10,12 +8,19 @@ import {
   migrateLayout,
   resolveDatasourceDialects,
 } from "../src/common/layout.ts";
-import { apkClientsContent, dbFilePatches } from "../src/common/plan.ts";
-import { MIGRATERS_ROOT } from "../src/common/pack-root.ts";
+import { apkClientsPatch, dbFilePatches } from "../src/common/plan.ts";
+import { fillPackTemplate } from "../src/common/pack-template.ts";
+import { loadHelpText } from "../src/common/help-text.ts";
+import { sqlDdlTokens } from "../src/common/sql-ddl.ts";
 import { entrypointPatch } from "../src/common/entrypoint.ts";
 import { settingsList } from "../src/common/settings.ts";
 
-const BIN_DIR = join(MIGRATERS_ROOT, "rust", "src", "bin");
+const RUST_BINS = [
+  { file: "migrate_setup.rs", verb: "setup" },
+  { file: "migrate_up.rs", verb: "up" },
+  { file: "migrate_down.rs", verb: "down" },
+  { file: "migrate_create.rs", verb: "create" },
+] as const;
 
 export const generate = async (
   ctx: GenerateContext,
@@ -23,14 +28,40 @@ export const generate = async (
   const dialects = resolveDatasourceDialects(ctx.settings);
   const layout = migrateLayout(ctx.settings, "rust");
   const { lane, shared } = layout.dockerPrefixes();
-  const names = await readdir(BIN_DIR);
-  const bins: GenerateEntry[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".rs")) continue;
-    bins.push(
-      content(`src/bin/${name}`, await readFile(join(BIN_DIR, name), "utf8")),
-    );
-  }
+  const dockerTokens = {
+    lane,
+    shared,
+    containerSqlRoot: layout.containerSqlRoot(),
+  };
+  const [ddl, cargoBin, cargoDeps, dockerCopy, dockerRuntime, apk, hook] =
+    await Promise.all([
+      sqlDdlTokens(),
+      fillPackTemplate("rust/templates/cargo_migrate_bin.toml"),
+      fillPackTemplate("rust/templates/cargo_migrate_deps.toml"),
+      fillPackTemplate("rust/templates/dockerfile_migrate_copy.tmpl", dockerTokens),
+      fillPackTemplate(
+        "rust/templates/dockerfile_migrate_runtime_copy.tmpl",
+        dockerTokens,
+      ),
+      apkClientsPatch(dialects),
+      entrypointPatch(
+        "rust",
+        "src/bin",
+        layout.containerSqlRoot(),
+        layout.containerMigrationsDir("sqlite"),
+      ),
+    ]);
+  const bins: GenerateEntry[] = await Promise.all(
+    RUST_BINS.map(async ({ file, verb }) =>
+      content(
+        `src/bin/${file}`,
+        await fillPackTemplate(`rust/templates/${file}`, {
+          ...ddl,
+          helpText: await loadHelpText(verb),
+        }),
+      ),
+    ),
+  );
   const gitkeeps =
     settingsList(ctx.settings, "backend.languages").length > 1
       ? []
@@ -39,59 +70,17 @@ export const generate = async (
         );
   return [
     ...bins,
-    patch(
-      "Cargo.toml",
-      [
-        '[[bin]]',
-        'name = "migrate-setup"',
-        'path = "src/bin/migrate_setup.rs"',
-        "",
-        "[[bin]]",
-        'name = "migrate-up"',
-        'path = "src/bin/migrate_up.rs"',
-        "",
-        "[[bin]]",
-        'name = "migrate-down"',
-        'path = "src/bin/migrate_down.rs"',
-        "",
-        "[[bin]]",
-        'name = "migrate-create"',
-        'path = "src/bin/migrate_create.rs"',
-      ].join("\n") + "\n",
-      "MIGRATE_BIN",
-    ),
-    patch(
-      "Cargo.toml",
-      `sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "mysql"] }
-dotenvy = "0.15"
-`,
-      "MIGRATE_DEPS",
-    ),
-    entrypointPatch(
-      "rust",
-      "src/bin",
-      layout.containerSqlRoot(),
-      layout.containerMigrationsDir("sqlite"),
-    ),
+    patch("Cargo.toml", cargoBin.endsWith("\n") ? cargoBin : `${cargoBin}\n`, "MIGRATE_BIN"),
+    patch("Cargo.toml", cargoDeps.endsWith("\n") ? cargoDeps : `${cargoDeps}\n`, "MIGRATE_DEPS"),
+    hook,
     ...dbFilePatches(dialects),
+    patch("Dockerfile", dockerCopy.endsWith("\n") ? dockerCopy : `${dockerCopy}\n`, "MIGRATE_COPY"),
     patch(
       "Dockerfile",
-      `COPY ${shared}sql ./sql
-COPY ${lane}src/bin ./src/bin
-`,
-      "MIGRATE_COPY",
-    ),
-    patch(
-      "Dockerfile",
-      `COPY --from=builder /app/target/release/migrate-setup /app/target/release/migrate-setup
-COPY --from=builder /app/target/release/migrate-up /app/target/release/migrate-up
-COPY --from=builder /app/target/release/migrate-down /app/target/release/migrate-down
-COPY --from=builder /app/target/release/migrate-create /app/target/release/migrate-create
-COPY ${shared}sql ${layout.containerSqlRoot()}
-`,
+      dockerRuntime.endsWith("\n") ? dockerRuntime : `${dockerRuntime}\n`,
       "MIGRATE_RUNTIME_COPY",
     ),
-    patch("Dockerfile", apkClientsContent(dialects), "APK_CLIENTS"),
+    apk,
     ...gitkeeps,
   ];
 };

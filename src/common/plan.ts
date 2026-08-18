@@ -1,3 +1,6 @@
+import { fillPackTemplate } from "./pack-template.ts";
+import { patch } from "./generate-entry.ts";
+
 export const DIALECT_DRIVER_PACKAGES: Record<
   string,
   { name: string; version: string; installScripts?: boolean }
@@ -41,7 +44,18 @@ export const dbGitignoreContent = (dialects: string[]): string => {
   ].join("\n");
 };
 
-export const apkClientsContent = (dialects: string[]): string => {
+export const apkClientsPatch = async (dialects: string[]) => {
+  const content = await fillPackTemplate("templates/apk_clients.tmpl", {
+    apkPackages: apkPackages(dialects),
+  });
+  return patch(
+    "Dockerfile",
+    content.endsWith("\n") ? content : `${content}\n`,
+    "APK_CLIENTS",
+  );
+};
+
+export const apkPackages = (dialects: string[]): string[] => {
   const seen = new Set<string>();
   const pkgs: string[] = [];
   for (const d of dialects) {
@@ -50,8 +64,7 @@ export const apkClientsContent = (dialects: string[]): string => {
     seen.add(p);
     pkgs.push(p);
   }
-  const tail = pkgs.length > 0 ? ` ${pkgs.join(" ")}` : "";
-  return `RUN apk add --no-cache git${tail}\n`;
+  return pkgs;
 };
 
 export const dbFilePatches = (dialects: string[]) => {
