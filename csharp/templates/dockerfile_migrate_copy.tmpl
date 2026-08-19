@@ -1,3 +1,0 @@
-COPY {{shared}}sql ./sql
-COPY {{lane}}{{migrateDir}} ./{{migrateDir}}
-RUN dotnet publish {{migrateDir}}/MigrateRunner.csproj -c Release -o /app/migrate-publish

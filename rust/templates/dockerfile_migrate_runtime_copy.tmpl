@@ -1,5 +1,0 @@
-COPY --from=builder /app/target/release/migrate-setup /app/target/release/migrate-setup
-COPY --from=builder /app/target/release/migrate-up /app/target/release/migrate-up
-COPY --from=builder /app/target/release/migrate-down /app/target/release/migrate-down
-COPY --from=builder /app/target/release/migrate-create /app/target/release/migrate-create
-COPY {{shared}}sql {{containerSqlRoot}}
