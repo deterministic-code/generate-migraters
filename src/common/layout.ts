@@ -1,15 +1,15 @@
+import type { GenerateContext } from "@deterministic-code/generators-common/generate-context";
 import { settingsList, settingsStr } from "./settings.ts";
-import type { SettingsDict } from "./generate-context.ts";
 
 const CONTAINER_SQL_ROOT = "/app/sql";
 
 export const backendLaneDir = ({
-  combined = false,
-  multiLanguage = false,
+  combined,
+  multiLanguage,
   language,
 }: {
-  combined?: boolean;
-  multiLanguage?: boolean;
+  combined: boolean;
+  multiLanguage: boolean;
   language: string;
 }): string => {
   const parts: string[] = [];
@@ -18,7 +18,10 @@ export const backendLaneDir = ({
   return parts.length > 0 ? `${parts.join("/")}/` : "";
 };
 
-export const migrateLayout = (settings: SettingsDict, language: string) => {
+export const migrateLayout = (
+  settings: GenerateContext["settings"],
+  language: string,
+) => {
   const langs = settingsList(settings, "backend.languages");
   const multiLanguage = langs.length > 1;
   const combined = settingsStr(settings, "application_tier") === "full-stack";
@@ -37,13 +40,38 @@ export const migrateLayout = (settings: SettingsDict, language: string) => {
   };
 };
 
-export const resolveDatasourceDialects = (settings: SettingsDict): string[] => {
+export const resolveDatasourceDialects = (
+  settings: GenerateContext["settings"],
+): string[] => {
   const datasources = settingsList(settings, "backend.datasources");
   return datasources.length > 0 ? datasources : ["sqlite"];
 };
 
 export const libraryReferenceMode = (
-  settings: SettingsDict,
+  settings: GenerateContext["settings"],
   language: string,
-): string =>
-  settingsStr(settings, `languages.${language}.library_reference_mode`) ?? "npm";
+): string => {
+  const mode = settingsStr(
+    settings,
+    `languages.${language}.library_reference_mode`,
+  );
+  return mode === undefined || mode === "" ? "npm" : mode;
+};
+
+export type MigrateMode = "bundled" | "reference";
+
+export const migrateMode = (
+  settings: GenerateContext["settings"],
+  language: string,
+): MigrateMode => {
+  const raw =
+    settingsStr(settings, `languages.${language}.migrate_mode`) ??
+    settingsStr(settings, "migrate_mode") ??
+    "bundled";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "bundled") return "bundled";
+  if (normalized === "reference") return "reference";
+  throw new Error(
+    `migrate_mode must be Bundled or Reference, got ${JSON.stringify(raw)}`,
+  );
+};

@@ -1,10 +1,10 @@
+import { fill } from "@deterministic-code/generators-common/fill";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   migrateCommand,
   type MigrateVerb,
 } from "./cli-contract.ts";
-import { fill } from "./fill.ts";
 import { PACK_ROOT } from "./pack-root.ts";
 
 const HELP_ROOT = join(PACK_ROOT, "templates", "help");

@@ -1,17 +1,12 @@
-import type { SettingsDict } from "./generate-context.ts";
+import type { GenerateContext } from "@deterministic-code/generators-common/generate-context";
 
 export const settingsStr = (
-  settings: SettingsDict,
+  settings: GenerateContext["settings"],
   key: string,
 ): string | undefined => settings[key];
 
-export const settingsBool = (
-  settings: SettingsDict,
-  key: string,
-): boolean => settings[key] === "true";
-
 export const settingsList = (
-  settings: SettingsDict,
+  settings: GenerateContext["settings"],
   key: string,
 ): string[] => {
   const raw = settings[key];

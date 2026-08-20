@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PACK_ROOT } from "./pack-root.ts";
-import type { FillTokens } from "./fill.ts";
 
 const SQL_ROOT = join(PACK_ROOT, "templates", "sql");
 
@@ -14,7 +13,7 @@ const FILES: { dialect: string; name: string; token: string }[] = [
   { dialect: "mysql", name: "migrate_logs", token: "mysqlMigrateLogsDdl" },
 ];
 
-export const sqlDdlTokens = async (): Promise<FillTokens> => {
+export const sqlDdlTokens = async (): Promise<Record<string, unknown>> => {
   const entries = await Promise.all(
     FILES.map(async ({ dialect, name, token }) => {
       const text = await readFile(join(SQL_ROOT, dialect, `${name}.sql`), "utf8");

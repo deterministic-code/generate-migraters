@@ -7,7 +7,7 @@ import {
   migrateCommand,
   usageLine,
 } from "../src/common/cli-contract.ts";
-import { fill } from "../src/common/fill.ts";
+import { fill } from "@deterministic-code/generators-common/fill";
 import { loadHelpText } from "../src/common/help-text.ts";
 import { PACK_ROOT } from "../src/common/pack-root.ts";
 

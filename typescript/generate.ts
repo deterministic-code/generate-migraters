@@ -1,52 +1,69 @@
-import type { GenerateContext } from "../src/common/generate-context.ts";
-import {
-  content,
-  patch,
-  type GenerateEntry,
-} from "../src/common/generate-entry.ts";
-import { fillPackTemplate } from "../src/common/pack-template.ts";
-import { libraryImportSpecifier } from "../src/common/library-import.ts";
+import { fill } from "@deterministic-code/generators-common/fill";
+import type { GenerateContext } from "@deterministic-code/generators-common/generate-context";
+import { content, patch, type GenerateEntry } from "@deterministic-code/generators-common/generate-entry";
+import { bundledEntries, loadManifest } from "../src/common/emit-bundle.ts";
+import { languageSpec } from "../src/common/manifest.ts";
 import {
   libraryReferenceMode,
   migrateLayout,
+  migrateMode,
   resolveDatasourceDialects,
 } from "../src/common/layout.ts";
+import { libraryImportSpecifier } from "../src/common/library-import.ts";
+import { fillPackTemplate } from "../src/common/pack-template.ts";
+import { settingsList } from "../src/common/settings.ts";
 import {
   apkClientsPatch,
   dbFilePatches,
-  dialectDriver,
-} from "../src/common/plan.ts";
-import { entrypointPatch } from "../src/common/entrypoint.ts";
-import { settingsList } from "../src/common/settings.ts";
+  dockerPatches,
+  entrypointPatch,
+} from "../src/common/wiring.ts";
 
 const TEST_DB_RELATIVE_PATH = ".test/prebuilt.sqlite";
-const MIGRATERS_DEP = "github:deterministic-code/migraters";
 
-const buildMigrateScripts = (
+const migrateScripts = (
+  commands: Record<string, string>,
   dialects: string[],
   migrationsPath: (dialect: string) => string,
 ): Record<string, string> => {
   const list = dialects.length > 0 ? dialects : ["sqlite"];
-  const defaultDialect = list.includes("sqlite") ? "sqlite" : list[0];
-  const cmds = (dialect: string) => ({
-    setup: `migrate-setup --provider ${dialect}`,
-    up: `migrate-up --provider ${dialect} --migrate-path ${migrationsPath(dialect)}`,
-    down: `migrate-down --provider ${dialect} --migrate-path ${migrationsPath(dialect)}`,
+  const defaultDialect = list.includes("sqlite") ? "sqlite" : list[0]!;
+  const filled = (dialect: string) => ({
+    setup: fill(commands.setup ?? "", {
+      provider: dialect,
+      migrationsPath: migrationsPath(dialect),
+    }),
+    up: fill(commands.up ?? "", {
+      provider: dialect,
+      migrationsPath: migrationsPath(dialect),
+    }),
+    down: fill(commands.down ?? "", {
+      provider: dialect,
+      migrationsPath: migrationsPath(dialect),
+    }),
   });
   const out: Record<string, string> = {};
-  if (dialects.length > 0) {
-    for (const dialect of list) {
-      const c = cmds(dialect);
-      out[`migrate:${dialect}:setup`] = c.setup;
-      out[`migrate:${dialect}`] = c.up;
-      out[`migrate:${dialect}:down`] = c.down;
-    }
+  for (const dialect of list) {
+    const cmd = filled(dialect);
+    out[`migrate:${dialect}:setup`] = cmd.setup;
+    out[`migrate:${dialect}`] = cmd.up;
+    out[`migrate:${dialect}:down`] = cmd.down;
   }
-  const def = cmds(defaultDialect);
+  const def = filled(defaultDialect);
   out["migrate:setup"] = def.setup;
   out.migrate = def.up;
   out["migrate:down"] = def.down;
   return out;
+};
+
+const gitkeeps = (
+  settings: GenerateContext["settings"],
+  dialects: string[],
+): GenerateEntry[] => {
+  if (settingsList(settings, "backend.languages").length > 1) return [];
+  return dialects.map((dialect) =>
+    content(`sql/${dialect}/migrations/.gitkeep`, ""),
+  );
 };
 
 export const generate = async (
@@ -54,58 +71,82 @@ export const generate = async (
 ): Promise<GenerateEntry[]> => {
   const dialects = resolveDatasourceDialects(ctx.settings);
   const layout = migrateLayout(ctx.settings, "typescript");
-  const mode = libraryReferenceMode(ctx.settings, "typescript");
-  const { shared } = layout.dockerPrefixes();
-  const libImport = libraryImportSpecifier("app", mode, "app.ts");
-  const [dbImportsRaw, beforeHook, dockerfileCopy, apk, hook] = await Promise.all([
-    fillPackTemplate("typescript/templates/app_ts_db_hook_imports.ts", { libImport }),
-    fillPackTemplate("typescript/templates/app_ts_before_hook.ts"),
-    fillPackTemplate("typescript/templates/dockerfile_migrate_copy.json.tmpl", {
-      shared,
-      containerSqlRoot: layout.containerSqlRoot(),
+  const mode = migrateMode(ctx.settings, "typescript");
+  const libMode = libraryReferenceMode(ctx.settings, "typescript");
+  const manifest = await loadManifest();
+  const spec = languageSpec(manifest, "typescript");
+  const { lane, shared } = layout.dockerPrefixes();
+  const dockerTokens = {
+    lane,
+    shared,
+    containerSqlRoot: layout.containerSqlRoot(),
+  };
+  const libImport = libraryImportSpecifier("app", libMode, "app.ts");
+  const [dbImportsRaw, beforeHook, apk, hook] = await Promise.all([
+    fillPackTemplate("typescript/templates/app_ts_db_hook_imports.ts", {
+      libImport,
     }),
-    apkClientsPatch(dialects),
+    fillPackTemplate("typescript/templates/app_ts_before_hook.ts", {}),
+    apkClientsPatch(spec, dialects),
     entrypointPatch(
       "typescript",
-      "migrate",
+      spec,
+      mode,
       layout.containerSqlRoot(),
       layout.containerMigrationsDir("sqlite"),
     ),
   ]);
   const scripts = {
-    ...buildMigrateScripts(dialects, layout.migrationsPath),
-    pretest: `migrate-setup --provider sqlite --connection $npm_package_config_test_db --migrate-path \${TEST_MIGRATIONS_DIR:-${layout.migrationsPath("sqlite")}} --and-up`,
+    ...migrateScripts(spec.commands, dialects, layout.migrationsPath),
+    pretest: fill(
+      `${spec.commands.setup} --connection $npm_package_config_test_db --migrate-path \${TEST_MIGRATIONS_DIR:-{{migrationsPath}}} --and-up`,
+      { provider: "sqlite", migrationsPath: layout.migrationsPath("sqlite") },
+    ),
   };
-  const dependencies: Record<string, string> = {
-    "@deterministic-code/migraters": MIGRATERS_DEP,
-  };
-  const allowScripts: Record<string, boolean> = {};
-  for (const dialect of dialects) {
-    const driver = dialectDriver(dialect);
-    if (!driver) continue;
-    dependencies[driver.name] = driver.version;
-    if (driver.installScripts) allowScripts[driver.name] = true;
-  }
-  const merge: Record<string, unknown> = {
+  const packagePatch: Record<string, unknown> = {
     scripts,
     config: { test_db: TEST_DB_RELATIVE_PATH },
-    dependencies,
   };
-  if (Object.keys(allowScripts).length > 0) merge.allowScripts = allowScripts;
-  const gitkeeps =
-    settingsList(ctx.settings, "backend.languages").length > 1
-      ? []
-      : dialects.map((dialect) =>
-          content(`sql/${dialect}/migrations/.gitkeep`, ""),
-        );
+  if (mode === "reference") {
+    const dependencies: Record<string, string> = {};
+    const allowScripts: Record<string, boolean> = {};
+    if (spec.reference?.package && spec.reference.spec) {
+      dependencies[spec.reference.package] = spec.reference.spec;
+    }
+    for (const dialect of dialects) {
+      for (const pkg of spec.dialects[dialect]?.packages ?? []) {
+        dependencies[pkg.name] = pkg.version;
+        if (pkg.installScripts) allowScripts[pkg.name] = true;
+      }
+    }
+    packagePatch.dependencies = dependencies;
+    if (Object.keys(allowScripts).length > 0) {
+      packagePatch.allowScripts = allowScripts;
+    }
+  } else if (spec.build.steps.length > 0) {
+    packagePatch.scripts = {
+      ...scripts,
+      "migrate:build": spec.build.steps
+        .map((step) => `npm --prefix ${spec.root}/${spec.build.cwd} ${step.replace(/^npm /, "")}`)
+        .join(" && "),
+    };
+  }
+  // Common `typescript/src/**/*.ts` includes every dialect driver; those
+  // modules load SQL templates at import time, so bundled mode must ship
+  // templates for the full dialect set even when the app only uses sqlite.
+  const bundled =
+    mode === "bundled"
+      ? await bundledEntries("typescript", Object.keys(spec.dialects))
+      : [];
   return [
-    patch("app.ts", dbImportsRaw.trimEnd() + "\n", "APP_DB_IMPORTS"),
-    patch("app.ts", beforeHook.trimEnd() + "\n", "APP_BEFORE_HOOK"),
+    ...bundled,
+    patch("app.ts", `${dbImportsRaw.trimEnd()}\n`, "APP_DB_IMPORTS"),
+    patch("app.ts", `${beforeHook.trimEnd()}\n`, "APP_BEFORE_HOOK"),
     hook,
-    patch("package.json", JSON.stringify(merge)),
+    patch("package.json", JSON.stringify(packagePatch)),
     ...dbFilePatches(dialects),
-    patch("Dockerfile", dockerfileCopy),
+    ...dockerPatches(spec, mode, dockerTokens),
     apk,
-    ...gitkeeps,
-  ].filter((e) => ("content" in e ? e.content.length > 0 : true));
+    ...gitkeeps(ctx.settings, dialects),
+  ];
 };
