@@ -30,6 +30,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/typescript dist/rust dist/csharp dist/templates && cp -R typescript/templates dist/typescript/ && cp -R rust/templates dist/rust/ && cp -R csharp/templates dist/csharp/ && cp -R templates dist/",
     "prepare": "npm run build",
+    "verify:prepare": "npm ci && npm run build",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "vitest run",
     "fetch-bundle": "node --experimental-strip-types src/bin/fetch-bundle.ts",

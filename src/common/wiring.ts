@@ -56,11 +56,14 @@ export const apkClientsPatch = async (
 export const dbFilePatches = (dialects: string[]): GenerateEntry[] => {
   const env = dbEnvContent(dialects);
   const gitignore = dbGitignoreContent(dialects);
-  return [
+  const entries: GenerateEntry[] = [
     patch(".env", env, "DB_ENV"),
     patch(".env.example", env, "DB_ENV"),
-    patch(".gitignore", gitignore, "DB_GITIGNORE"),
-  ].filter((entry) => entry.content.length > 0);
+  ];
+  if (gitignore.length > 0) {
+    entries.push(patch(".gitignore", gitignore, "DB_GITIGNORE"));
+  }
+  return entries;
 };
 
 const withNewline = (text: string): string =>
