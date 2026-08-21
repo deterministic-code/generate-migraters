@@ -1,8 +1,11 @@
+import { execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFile } from "node:child_process/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { fetchBundle } from "../common/fetch-bundle.ts";
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_REPO = "https://github.com/deterministic-code/migraters.git";
 
@@ -19,7 +22,7 @@ const argValue = (argv: string[], flag: string): string | undefined => {
 const cloneMigraters = async (repo: string, ref: string): Promise<string> => {
   const dir = join(tmpdir(), `migraters-bundle-${Date.now()}`);
   await mkdir(dir, { recursive: true });
-  await execFile("git", ["clone", "--depth", "1", "--branch", ref, repo, dir]);
+  await execFileAsync("git", ["clone", "--depth", "1", "--branch", ref, repo, dir]);
   return dir;
 };
 

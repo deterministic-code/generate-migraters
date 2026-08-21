@@ -85,12 +85,16 @@ describe("generate lanes emit the same CLI help", () => {
       scripts: Record<string, string>;
       dependencies?: Record<string, string>;
     };
-    expect(merge.scripts["migrate:setup"]).toContain("migrate-setup --provider");
-    expect(merge.scripts.migrate).toContain("migrate-up --provider");
-    expect(merge.scripts["migrate:down"]).toContain("migrate-down --provider");
-    expect(merge.dependencies?.["@deterministic-code/migraters"]).toBe(
-      "file:./migraters/typescript",
+    expect(merge.scripts["migrate:setup"]).toContain(
+      "npm --prefix migraters/typescript exec -- migrate-setup --provider",
     );
+    expect(merge.scripts.migrate).toContain(
+      "npm --prefix migraters/typescript exec -- migrate-up --provider",
+    );
+    expect(merge.scripts["migrate:down"]).toContain(
+      "npm --prefix migraters/typescript exec -- migrate-down --provider",
+    );
+    expect(merge.dependencies?.["@deterministic-code/migraters"]).toBeUndefined();
     const bundledPkg = tsEntries.find(
       (e) =>
         e.kind === "content" && e.filename === "migraters/typescript/package.json",

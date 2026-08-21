@@ -25,22 +25,29 @@ const migrateScripts = (
   commands: Record<string, string>,
   dialects: string[],
   migrationsPath: (dialect: string) => string,
+  invoke: (cmd: string) => string,
 ): Record<string, string> => {
   const list = dialects.length > 0 ? dialects : ["sqlite"];
   const defaultDialect = list.includes("sqlite") ? "sqlite" : list[0]!;
   const filled = (dialect: string) => ({
-    setup: fill(commands.setup ?? "", {
-      provider: dialect,
-      migrationsPath: migrationsPath(dialect),
-    }),
-    up: fill(commands.up ?? "", {
-      provider: dialect,
-      migrationsPath: migrationsPath(dialect),
-    }),
-    down: fill(commands.down ?? "", {
-      provider: dialect,
-      migrationsPath: migrationsPath(dialect),
-    }),
+    setup: invoke(
+      fill(commands.setup ?? "", {
+        provider: dialect,
+        migrationsPath: migrationsPath(dialect),
+      }),
+    ),
+    up: invoke(
+      fill(commands.up ?? "", {
+        provider: dialect,
+        migrationsPath: migrationsPath(dialect),
+      }),
+    ),
+    down: invoke(
+      fill(commands.down ?? "", {
+        provider: dialect,
+        migrationsPath: migrationsPath(dialect),
+      }),
+    ),
   });
   const out: Record<string, string> = {};
   for (const dialect of list) {
@@ -123,11 +130,18 @@ export const generate = async (
       layout.containerMigrationsDir("sqlite"),
     ),
   ]);
+  const prefix = `${spec.root}/${spec.build.cwd}`;
+  const invoke =
+    mode === "bundled"
+      ? (cmd: string) => `npm --prefix ${prefix} exec -- ${cmd}`
+      : (cmd: string) => cmd;
   const scripts = {
-    ...migrateScripts(spec.commands, dialects, layout.migrationsPath),
-    pretest: fill(
-      `${spec.commands.setup} --connection $npm_package_config_test_db --migrate-path \${TEST_MIGRATIONS_DIR:-{{migrationsPath}}} --and-up`,
-      { provider: "sqlite", migrationsPath: layout.migrationsPath("sqlite") },
+    ...migrateScripts(spec.commands, dialects, layout.migrationsPath, invoke),
+    pretest: invoke(
+      fill(
+        `${spec.commands.setup} --connection $npm_package_config_test_db --migrate-path \${TEST_MIGRATIONS_DIR:-{{migrationsPath}}} --and-up`,
+        { provider: "sqlite", migrationsPath: layout.migrationsPath("sqlite") },
+      ),
     ),
   };
   const packagePatch: Record<string, unknown> = {
@@ -154,23 +168,9 @@ export const generate = async (
     packagePatch.scripts = {
       ...scripts,
       "migrate:build": spec.build.steps
-        .map((step) => `npm --prefix ${spec.root}/${spec.build.cwd} ${step.replace(/^npm /, "")}`)
+        .map((step) => `npm --prefix ${prefix} ${step.replace(/^npm /, "")}`)
         .join(" && "),
     };
-    if (spec.reference?.package) {
-      packagePatch.dependencies = {
-        [spec.reference.package]: `file:./${spec.root}/${spec.build.cwd}`,
-      };
-    }
-    const allowScripts: Record<string, boolean> = {};
-    for (const dialect of dialects) {
-      for (const pkg of spec.dialects[dialect]?.packages ?? []) {
-        if (pkg.installScripts) allowScripts[pkg.name] = true;
-      }
-    }
-    if (Object.keys(allowScripts).length > 0) {
-      packagePatch.allowScripts = allowScripts;
-    }
   }
   // Common `typescript/src/**/*.ts` includes every dialect driver; those
   // modules load SQL templates at import time, so bundled mode must ship
