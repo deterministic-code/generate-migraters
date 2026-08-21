@@ -66,6 +66,33 @@ const gitkeeps = (
   );
 };
 
+/** Library package.json runs generate:help; bundled mode excludes that file. */
+const bundledPackageScripts = (
+  scripts: Record<string, string>,
+): Record<string, string> => {
+  const { "generate:help": _omit, ...rest } = scripts;
+  return { ...rest, prepare: "npm run build" };
+};
+
+const emitBundledPackageJson = (
+  entries: GenerateEntry[],
+  packageRel: string,
+): GenerateEntry[] =>
+  entries.map((entry) => {
+    if (entry.kind !== "content" || entry.filename !== packageRel) return entry;
+    const pkg = JSON.parse(entry.contents) as {
+      scripts?: Record<string, string>;
+    };
+    return {
+      ...entry,
+      contents: `${JSON.stringify(
+        { ...pkg, scripts: bundledPackageScripts(pkg.scripts ?? {}) },
+        null,
+        2,
+      )}\n`,
+    };
+  });
+
 export const generate = async (
   ctx: GenerateContext,
 ): Promise<GenerateEntry[]> => {
@@ -130,13 +157,30 @@ export const generate = async (
         .map((step) => `npm --prefix ${spec.root}/${spec.build.cwd} ${step.replace(/^npm /, "")}`)
         .join(" && "),
     };
+    if (spec.reference?.package) {
+      packagePatch.dependencies = {
+        [spec.reference.package]: `file:./${spec.root}/${spec.build.cwd}`,
+      };
+    }
+    const allowScripts: Record<string, boolean> = {};
+    for (const dialect of dialects) {
+      for (const pkg of spec.dialects[dialect]?.packages ?? []) {
+        if (pkg.installScripts) allowScripts[pkg.name] = true;
+      }
+    }
+    if (Object.keys(allowScripts).length > 0) {
+      packagePatch.allowScripts = allowScripts;
+    }
   }
   // Common `typescript/src/**/*.ts` includes every dialect driver; those
   // modules load SQL templates at import time, so bundled mode must ship
   // templates for the full dialect set even when the app only uses sqlite.
   const bundled =
     mode === "bundled"
-      ? await bundledEntries("typescript", Object.keys(spec.dialects))
+      ? emitBundledPackageJson(
+          await bundledEntries("typescript", Object.keys(spec.dialects)),
+          `${spec.root}/${spec.build.cwd}/package.json`,
+        )
       : [];
   return [
     ...bundled,

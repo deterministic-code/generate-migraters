@@ -81,10 +81,29 @@ describe("generate lanes emit the same CLI help", () => {
       (e) => e.kind === "patch" && e.filename === "package.json",
     );
     if (!pkg || pkg.kind !== "patch") throw new Error("package.json patch missing");
-    const merge = JSON.parse(pkg.content) as { scripts: Record<string, string> };
+    const merge = JSON.parse(pkg.content) as {
+      scripts: Record<string, string>;
+      dependencies?: Record<string, string>;
+    };
     expect(merge.scripts["migrate:setup"]).toContain("migrate-setup --provider");
     expect(merge.scripts.migrate).toContain("migrate-up --provider");
     expect(merge.scripts["migrate:down"]).toContain("migrate-down --provider");
+    expect(merge.dependencies?.["@deterministic-code/migraters"]).toBe(
+      "file:./migraters/typescript",
+    );
+    const bundledPkg = tsEntries.find(
+      (e) =>
+        e.kind === "content" && e.filename === "migraters/typescript/package.json",
+    );
+    if (!bundledPkg || bundledPkg.kind !== "content") {
+      throw new Error("bundled migraters/typescript/package.json missing");
+    }
+    expect(bundledPkg.contents).not.toContain("generate-help");
+    expect(bundledPkg.contents).not.toContain("generate:help");
+    const bundledScripts = (
+      JSON.parse(bundledPkg.contents) as { scripts: Record<string, string> }
+    ).scripts;
+    expect(bundledScripts.prepare).toBe("npm run build");
     const rust = contentsByName(rustEntries);
     expect(hasSuffix(rust, "migrate_setup.rs")).toBe(true);
     expect(hasSuffix(rust, "migrate_up.rs")).toBe(true);
