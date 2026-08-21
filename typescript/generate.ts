@@ -2,7 +2,7 @@ import { fill } from "@deterministic-code/generators-common/fill";
 import type { GenerateContext } from "@deterministic-code/generators-common/generate-context";
 import { content, patch, type GenerateEntry } from "@deterministic-code/generators-common/generate-entry";
 import { bundledEntries, loadManifest } from "../src/common/emit-bundle.ts";
-import { languageSpec } from "../src/common/manifest.ts";
+import { languageSpec, type LanguageSpec } from "../src/common/manifest.ts";
 import {
   libraryReferenceMode,
   migrateLayout,
@@ -81,19 +81,72 @@ const bundledPackageScripts = (
   return { ...rest, prepare: "npm run build" };
 };
 
+/** v13 ships prebuilds and drops deprecated prebuild-install. */
+const SQLITE_DRIVER = "^13.0.3";
+/** glob 10/11 are deprecated; 13 is the current maintained line. */
+const GLOB_OVERRIDE = "^13.0.6";
+
+const appInstallAllowScripts = (
+  spec: LanguageSpec,
+): Record<string, boolean> => {
+  const allowScripts: Record<string, boolean> = {
+    "@deterministic-code/deterministic": true,
+    "@scarf/scarf": true,
+    "core-js": true,
+    esbuild: true,
+  };
+  for (const dialect of Object.values(spec.dialects)) {
+    for (const pkg of dialect.packages ?? []) {
+      if (pkg.installScripts) allowScripts[pkg.name] = true;
+    }
+  }
+  return allowScripts;
+};
+
+const installOverrides = (): Record<string, string> => ({
+  "better-sqlite3": SQLITE_DRIVER,
+  glob: GLOB_OVERRIDE,
+});
+
+const bundledAllowScripts = (
+  spec: LanguageSpec,
+): Record<string, boolean> => {
+  const allowScripts: Record<string, boolean> = { esbuild: true };
+  for (const dialect of Object.values(spec.dialects)) {
+    for (const pkg of dialect.packages ?? []) {
+      if (pkg.installScripts) allowScripts[pkg.name] = true;
+    }
+  }
+  return allowScripts;
+};
+
 const emitBundledPackageJson = (
   entries: GenerateEntry[],
   packageRel: string,
+  spec: LanguageSpec,
 ): GenerateEntry[] =>
   entries.map((entry) => {
     if (entry.kind !== "content" || entry.filename !== packageRel) return entry;
     const pkg = JSON.parse(entry.contents) as {
       scripts?: Record<string, string>;
+      dependencies?: Record<string, string>;
+      allowScripts?: Record<string, boolean>;
+      overrides?: Record<string, string>;
     };
+    const dependencies = { ...pkg.dependencies };
+    if (dependencies["better-sqlite3"] !== undefined) {
+      dependencies["better-sqlite3"] = SQLITE_DRIVER;
+    }
     return {
       ...entry,
       contents: `${JSON.stringify(
-        { ...pkg, scripts: bundledPackageScripts(pkg.scripts ?? {}) },
+        {
+          ...pkg,
+          dependencies,
+          scripts: bundledPackageScripts(pkg.scripts ?? {}),
+          allowScripts: { ...pkg.allowScripts, ...bundledAllowScripts(spec) },
+          overrides: { ...pkg.overrides, ...installOverrides() },
+        },
         null,
         2,
       )}\n`,
@@ -147,23 +200,20 @@ export const generate = async (
   const packagePatch: Record<string, unknown> = {
     scripts,
     config: { test_db: TEST_DB_RELATIVE_PATH },
+    allowScripts: appInstallAllowScripts(spec),
+    overrides: installOverrides(),
   };
   if (mode === "reference") {
     const dependencies: Record<string, string> = {};
-    const allowScripts: Record<string, boolean> = {};
     if (spec.reference?.package && spec.reference.spec) {
       dependencies[spec.reference.package] = spec.reference.spec;
     }
     for (const dialect of dialects) {
       for (const pkg of spec.dialects[dialect]?.packages ?? []) {
         dependencies[pkg.name] = pkg.version;
-        if (pkg.installScripts) allowScripts[pkg.name] = true;
       }
     }
     packagePatch.dependencies = dependencies;
-    if (Object.keys(allowScripts).length > 0) {
-      packagePatch.allowScripts = allowScripts;
-    }
   } else if (spec.build.steps.length > 0) {
     packagePatch.scripts = {
       ...scripts,
@@ -180,6 +230,7 @@ export const generate = async (
       ? emitBundledPackageJson(
           await bundledEntries("typescript", Object.keys(spec.dialects)),
           `${spec.root}/${spec.build.cwd}/package.json`,
+          spec,
         )
       : [];
   return [

@@ -84,6 +84,8 @@ describe("generate lanes emit the same CLI help", () => {
     const merge = JSON.parse(pkg.content) as {
       scripts: Record<string, string>;
       dependencies?: Record<string, string>;
+      allowScripts?: Record<string, boolean>;
+      overrides?: Record<string, string>;
     };
     expect(merge.scripts["migrate:setup"]).toContain(
       "npm --prefix migraters/typescript exec -- migrate-setup --provider",
@@ -95,6 +97,10 @@ describe("generate lanes emit the same CLI help", () => {
       "npm --prefix migraters/typescript exec -- migrate-down --provider",
     );
     expect(merge.dependencies?.["@deterministic-code/migraters"]).toBeUndefined();
+    expect(merge.allowScripts?.["better-sqlite3"]).toBe(true);
+    expect(merge.allowScripts?.["@deterministic-code/deterministic"]).toBe(true);
+    expect(merge.overrides?.["better-sqlite3"]).toBe("^13.0.3");
+    expect(merge.overrides?.glob).toBe("^13.0.6");
     const bundledPkg = tsEntries.find(
       (e) =>
         e.kind === "content" && e.filename === "migraters/typescript/package.json",
@@ -104,10 +110,18 @@ describe("generate lanes emit the same CLI help", () => {
     }
     expect(bundledPkg.contents).not.toContain("generate-help");
     expect(bundledPkg.contents).not.toContain("generate:help");
-    const bundledScripts = (
-      JSON.parse(bundledPkg.contents) as { scripts: Record<string, string> }
-    ).scripts;
-    expect(bundledScripts.prepare).toBe("npm run build");
+    const bundled = JSON.parse(bundledPkg.contents) as {
+      scripts: Record<string, string>;
+      dependencies: Record<string, string>;
+      allowScripts: Record<string, boolean>;
+      overrides: Record<string, string>;
+    };
+    expect(bundled.scripts.prepare).toBe("npm run build");
+    expect(bundled.dependencies["better-sqlite3"]).toBe("^13.0.3");
+    expect(bundled.allowScripts["better-sqlite3"]).toBe(true);
+    expect(bundled.allowScripts.esbuild).toBe(true);
+    expect(bundled.overrides["better-sqlite3"]).toBe("^13.0.3");
+    expect(bundled.overrides.glob).toBe("^13.0.6");
     const rust = contentsByName(rustEntries);
     expect(hasSuffix(rust, "migrate_setup.rs")).toBe(true);
     expect(hasSuffix(rust, "migrate_up.rs")).toBe(true);
